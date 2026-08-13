@@ -1,91 +1,72 @@
 pipeline {
-    agent any
-
+    agent any 
     environment {
-        IMAGE_NAME = "manojkrishnappa/checkoutservice:${GIT_COMMIT}"
+        IMAGE_NAME = "obitomanu/checkoutservice:${GIT_COMMIT}"
     }
-
     stages {
-
-        stage('Git Checkout') {
+        stage ("CleanWS"){
             steps {
-                git url: 'https://github.com/ITkannadigaru/checkoutservice.git', branch: 'main'
+                CleanWs()
             }
         }
+        stage("Git-Checkout") {
+            steps {
+                git branch: 'main', url: 'https://github.com/Micro-Services-Project/checkoutservice.git'
+            }
+        }
+        stage('SonarQube Analysis') {
+            steps {
+                script {
+                    def scannerHome = tool 'Sonar'
 
-        stage('Run Unit Tests') {
+                    withSonarQubeEnv('Sonar') {
+                        sh """
+                            ${scannerHome}/bin/sonar-scanner \
+                            -Dsonar.projectKey=checkoutservice \
+                            -Dsonar.projectName=checkoutservice \
+                            -Dsonar.sources=.
+                        """
+                    }
+                }
+            }
+        }
+        stage("Quality Gate") {
+            steps {
+                waitForQualityGate abortPipeline: false, credentialsId: 'Sonar'
+            }
+        }
+        stage("Run Unit Tests") {
             steps {
                 sh 'go test ./...'
             }
         }
-
-        stage('Docker Build') {
+        stage("Build") {
             steps {
-                sh '''
-                    printenv
-                    docker build -t ${IMAGE_NAME} .
-                '''
+                sh """
+                   printenv
+                   docker build -t ${IMAGE_NAME} .
+                   """
             }
         }
-
-        stage('Login to Docker Hub') {
+        stage("Scan") {
             steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'docker-hub-creds',
-                    usernameVariable: 'DOCKER_USERNAME',
-                    passwordVariable: 'DOCKER_PASSWORD'
-                )]) {
-                    sh "echo $DOCKER_PASSWORD | docker login -u $DOCKER_USERNAME --password-stdin"
+                sh """ 
+                   trivy image ${IMAGE_NAME} >> checkoutservice-report.txt
+                   """
+                   }
+        }
+        stage ("push Image") {
+            steps {
+                script {
+                    withDockerRegistry(credentialsId: 'Docker') {
+                        sh """
+                           docker push ${IMAGE_NAME}
+                           """
+                    }
                 }
             }
-        }
-
-        stage('Push to Docker Hub') {
-            steps {
-                sh "docker push ${IMAGE_NAME}"
-            }
-        }
-
-        stage('Update GitOps Deployment') {
-            steps {
-                withCredentials([usernamePassword(
-                    credentialsId: 'github-creds',
-                    usernameVariable: 'GIT_USERNAME',
-                    passwordVariable: 'GIT_PASSWORD'
-                )]) {
-                    sh '''
-                        if [ -d "gitops" ]; then
-                            echo "gitops directory exists. Removing it..."
-                            rm -rf gitops
-                        fi
-                        git clone https://$GIT_USERNAME:$GIT_PASSWORD@github.com/ITkannadigaru/GitOps.git gitops
-                        cd gitops/base/checkoutservice/
-
-                        git config user.email "jenkins@ci.com"
-                        git config user.name "jenkins"
-
-                        # Update image tag
-                        sed -i "s|image: .*checkoutservice.*|image: ${IMAGE_NAME}|g" deployment.yaml
-
-                        git add .
-                        git commit -m "Update checkoutservice image to ${IMAGE_NAME}"
-                        git push origin main
-                    '''
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            sh "docker rmi ${IMAGE_NAME} || true"
-            sh "docker logout || true"
-        }
-        success {
-            echo "Build and push successful: ${IMAGE_NAME}"
-        }
-        failure {
-            echo "Pipeline failed. Check the logs above."
         }
     }
 }
+
+
