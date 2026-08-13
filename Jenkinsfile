@@ -6,7 +6,7 @@ pipeline {
     stages {
         stage ("CleanWS"){
             steps {
-                CleanWs()
+                cleanWs()
             }
         }
         stage("Git-Checkout") {
